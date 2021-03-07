@@ -1,0 +1,29 @@
+[package]
+name = "headmaster"
+version = "0.1.0"
+authors = ["Jerome David <programingjd@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+num_cpus = "1.13.0"
+#lazy_static = "1.4.0"
+
+[dependencies.tokio]
+version = "1.2.0"
+features = [
+    "rt-multi-thread",
+    "io-std",
+    "net",
+    "time",
+    "parking_lot",
+]
+
+[lib]
+name = "headmaster"
+path = "src/lib.rs"
+
+[[bin]]
+name = "headmaster"
+path = "src/main.rs"
