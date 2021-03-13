@@ -7,22 +7,25 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-num_cpus = "1.13.0"
-#lazy_static = "1.4.0"
+num_cpus = "1.13"
+lazy_static = "1.4"
+crossbeam = "0.8.0"
 
 [dependencies.tokio]
-version = "1.2.0"
+version = "1.3"
 features = [
     "rt-multi-thread",
-    "io-std",
     "net",
+    "io-util",
+    "macros",
+    "io-std",
     "time",
     "parking_lot",
 ]
 
-[lib]
-name = "headmaster"
-path = "src/lib.rs"
+#[lib]
+#name = "headmaster"
+#path = "src/lib.rs"
 
 [[bin]]
 name = "headmaster"

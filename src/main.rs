@@ -1,9 +1,20 @@
+use crate::conf::{BindAddress, ConfBuilder, ConfImpl};
 use crate::errors::Error;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
+#[macro_use]
+extern crate lazy_static;
 
-mod config;
+mod conf;
 mod errors;
 mod tcp;
+
+lazy_static! {
+    static ref CONFIG: ConfImpl = ConfBuilder::new(BindAddress::TcpSocket {
+        address: SocketAddr::from(([0, 0, 0, 0], 80))
+    })
+    .build();
+}
 
 fn main() -> Result<(), Error> {
     let worker_thread_count = std::cmp::max(1, num_cpus::get() - 1);
@@ -23,6 +34,7 @@ fn main() -> Result<(), Error> {
             format!("{}-worker-{}", name, id)
         })
         .build()?;
-    runtime.block_on(tcp::forward(config::Config {}));
+    let conf: &ConfImpl = &CONFIG;
+    runtime.block_on(tcp::connect(conf))?;
     Ok(())
 }
