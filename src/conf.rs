@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
@@ -192,7 +192,9 @@ impl Conf<Backend> for ConfImpl {
 
     fn select(&self, remote_address: &SocketAddr, _trace: Self::Trace) -> Option<&Backend> {
         let selected = self.backends.first();
-        if selected.is_none() {
+        if let Some(backend) = selected {
+            backend.active_counter.fetch_add(1, Ordering::Relaxed);
+        } else {
             eprintln!("{} => NO BACKEND", remote_address);
         }
         selected
@@ -221,6 +223,10 @@ impl Conf<Backend> for ConfImpl {
         trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
+        backend_address
+            .active_counter
+            .fetch_sub(1, Ordering::Relaxed);
+        backend_address.last_failure.store(0, Ordering::Relaxed);
         println!(
             "{} [{}] => {} [{}] ({}ms)",
             remote_address,
@@ -238,6 +244,12 @@ impl Conf<Backend> for ConfImpl {
         trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
+        backend_address
+            .active_counter
+            .fetch_sub(1, Ordering::Relaxed);
+        backend_address
+            .last_failure
+            .store(time.as_secs(), Ordering::Relaxed);
         eprintln!(
             "{} => {} FAILURE ({}ms)\n{}",
             remote_address,
@@ -254,6 +266,12 @@ impl Conf<Backend> for ConfImpl {
         trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
+        backend_address
+            .active_counter
+            .fetch_sub(1, Ordering::Relaxed);
+        backend_address
+            .last_failure
+            .store(time.as_secs(), Ordering::Relaxed);
         eprintln!(
             "{} => {} TIMEOUT ({}ms)\n{}",
             remote_address,
@@ -270,6 +288,12 @@ impl Conf<Backend> for ConfImpl {
         trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
+        backend_address
+            .active_counter
+            .fetch_sub(1, Ordering::Relaxed);
+        backend_address
+            .last_failure
+            .store(time.as_secs(), Ordering::Relaxed);
         eprintln!(
             "{} [FAILURE] => {} ({}ms)\n{}",
             remote_address,
@@ -286,6 +310,12 @@ impl Conf<Backend> for ConfImpl {
         trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
+        backend_address
+            .active_counter
+            .fetch_sub(1, Ordering::Relaxed);
+        backend_address
+            .last_failure
+            .store(time.as_secs(), Ordering::Relaxed);
         eprintln!(
             "{} [TIMEOUT] => {} ({}ms)\n{}",
             remote_address,
@@ -302,6 +332,12 @@ impl Conf<Backend> for ConfImpl {
         trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
+        backend_address
+            .active_counter
+            .fetch_sub(1, Ordering::Relaxed);
+        backend_address
+            .last_failure
+            .store(time.as_secs(), Ordering::Relaxed);
         eprintln!(
             "{} [] => {} [FAILURE] ({}ms)\n{}",
             remote_address,
@@ -318,6 +354,12 @@ impl Conf<Backend> for ConfImpl {
         trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
+        backend_address
+            .active_counter
+            .fetch_sub(1, Ordering::Relaxed);
+        backend_address
+            .last_failure
+            .store(time.as_secs(), Ordering::Relaxed);
         eprintln!(
             "{} [] => {} [TIMEOUT] ({}ms)\n{}",
             remote_address,
@@ -331,7 +373,7 @@ impl Conf<Backend> for ConfImpl {
 pub struct Backend {
     address: SocketAddr,
     active_counter: AtomicI32,
-    last_failure: AtomicU64,
+    last_failure: AtomicU64, // secs
     unavailable: AtomicBool,
 }
 
