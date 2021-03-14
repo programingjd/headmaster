@@ -10,10 +10,8 @@ mod errors;
 mod tcp;
 
 lazy_static! {
-    static ref CONFIG: ConfImpl = ConfBuilder::new(BindAddress::TcpSocket {
-        address: SocketAddr::from(([0, 0, 0, 0], 80))
-    })
-    .build();
+    static ref CONFIG: ConfImpl =
+        ConfBuilder::new(BindAddress::TcpSocket(SocketAddr::from(([0, 0, 0, 0], 80)))).build();
 }
 
 fn main() -> Result<(), Error> {

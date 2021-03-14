@@ -6,12 +6,8 @@ use std::time::{Duration, Instant};
 pub enum BindAddress {
     #[cfg(target_os = "unix")]
     UnixSocket(std::os::unix::io::RawFd),
-    TcpSocket {
-        address: SocketAddr,
-    },
+    TcpSocket(SocketAddr),
 }
-
-pub enum IncomingStream {}
 
 pub trait Conf {
     type Trace: Copy + Send;
@@ -150,12 +146,10 @@ impl ConfBuilder {
 
     fn admin_address_from(bind_address: &BindAddress) -> BindAddress {
         match bind_address {
-            BindAddress::TcpSocket { address } => BindAddress::TcpSocket {
-                address: SocketAddr::from((
-                    address.ip(),
-                    if address.port() == 8000 { 8001 } else { 8000 },
-                )),
-            },
+            BindAddress::TcpSocket(address) => BindAddress::TcpSocket(SocketAddr::from((
+                address.ip(),
+                if address.port() == 8000 { 8001 } else { 8000 },
+            ))),
             #[cfg(target_os = "unix")]
             UnixSocket(fd) => BindAddress::TcpSocket {
                 address: SocketAddr::from((0, 0, 0, 0), 8000),
@@ -233,22 +227,6 @@ impl Conf for ConfImpl {
             time.as_millis()
         );
     }
-    fn record_connection_timeout(
-        &self,
-        remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
-        error: std::io::Error,
-        trace: Instant,
-    ) {
-        let time = Instant::now().duration_since(trace);
-        eprintln!(
-            "{} => {} TIMEOUT ({}ms)\n{}",
-            remote_address,
-            backend_address,
-            time.as_millis(),
-            error
-        );
-    }
     fn record_connection_failure(
         &self,
         remote_address: &SocketAddr,
@@ -265,7 +243,7 @@ impl Conf for ConfImpl {
             error
         );
     }
-    fn record_read_timeout(
+    fn record_connection_timeout(
         &self,
         remote_address: &SocketAddr,
         backend_address: &SocketAddr,
@@ -274,7 +252,7 @@ impl Conf for ConfImpl {
     ) {
         let time = Instant::now().duration_since(trace);
         eprintln!(
-            "{} [TIMEOUT] => {} ({}ms)\n{}",
+            "{} => {} TIMEOUT ({}ms)\n{}",
             remote_address,
             backend_address,
             time.as_millis(),
@@ -297,7 +275,7 @@ impl Conf for ConfImpl {
             error
         );
     }
-    fn record_write_timeout(
+    fn record_read_timeout(
         &self,
         remote_address: &SocketAddr,
         backend_address: &SocketAddr,
@@ -306,7 +284,7 @@ impl Conf for ConfImpl {
     ) {
         let time = Instant::now().duration_since(trace);
         eprintln!(
-            "{} [] => {} [TIMEOUT] ({}ms)\n{}",
+            "{} [TIMEOUT] => {} ({}ms)\n{}",
             remote_address,
             backend_address,
             time.as_millis(),
@@ -323,6 +301,22 @@ impl Conf for ConfImpl {
         let time = Instant::now().duration_since(trace);
         eprintln!(
             "{} [] => {} [FAILURE] ({}ms)\n{}",
+            remote_address,
+            backend_address,
+            time.as_millis(),
+            error
+        );
+    }
+    fn record_write_timeout(
+        &self,
+        remote_address: &SocketAddr,
+        backend_address: &SocketAddr,
+        error: std::io::Error,
+        trace: Instant,
+    ) {
+        let time = Instant::now().duration_since(trace);
+        eprintln!(
+            "{} [] => {} [TIMEOUT] ({}ms)\n{}",
             remote_address,
             backend_address,
             time.as_millis(),
