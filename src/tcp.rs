@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 
-pub async fn connect<B: ToSocketAddr + Sync, C: Conf<B> + Sync>(
+pub async fn connect<B: ToSocketAddr + Sync + Send, C: Conf<B> + Sync>(
     config: &'static C,
 ) -> Result<(), Error> {
     let listener = config.bind_address().bind().await?;

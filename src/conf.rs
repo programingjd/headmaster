@@ -1,6 +1,8 @@
+use crossbeam::sync::ShardedLock;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
@@ -19,7 +21,7 @@ pub trait Conf<T: ToSocketAddr> {
     fn bind_address(&self) -> &BindAddress;
     fn admin_address(&self) -> &BindAddress;
     fn accept(&self, remote_address: &SocketAddr) -> Option<Self::Trace>;
-    fn select(&self, remote_address: &SocketAddr, trace: Self::Trace) -> Option<&T>;
+    fn select(&self, remote_address: &SocketAddr, trace: Self::Trace) -> Option<T>;
     fn connection_timeout(&self) -> Option<Duration>;
     fn read_timeout(&self) -> Option<Duration>;
     fn write_timeout(&self) -> Option<Duration>;
@@ -28,7 +30,7 @@ pub trait Conf<T: ToSocketAddr> {
     fn record_success(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &T,
+        backend_address: T,
         request_size: u64,
         response_size: u64,
         trace: Self::Trace,
@@ -36,42 +38,42 @@ pub trait Conf<T: ToSocketAddr> {
     fn record_connection_failure(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &T,
+        backend_address: T,
         error: std::io::Error,
         trace: Self::Trace,
     );
     fn record_connection_timeout(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &T,
+        backend_address: T,
         error: std::io::Error,
         trace: Self::Trace,
     );
     fn record_read_failure(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &T,
+        backend_address: T,
         error: std::io::Error,
         trace: Self::Trace,
     );
     fn record_read_timeout(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &T,
+        backend_address: T,
         error: std::io::Error,
         trace: Self::Trace,
     );
     fn record_write_failure(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &T,
+        backend_address: T,
         error: std::io::Error,
         trace: Self::Trace,
     );
     fn record_write_timeout(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &T,
+        backend_address: T,
         error: std::io::Error,
         trace: Self::Trace,
     );
@@ -144,7 +146,7 @@ impl ConfBuilder {
             connection_timeout: self.connection_timeout,
             read_timeout: self.read_timeout,
             write_timeout: self.write_timeout,
-            backends: vec![],
+            backends: ShardedLock::new(vec![]),
             blacklist: self.blacklist.iter().map(|it| it.clone()).collect(),
         }
     }
@@ -169,11 +171,17 @@ pub struct ConfImpl {
     connection_timeout: Option<Duration>,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
-    backends: Vec<Backend>,
+    backends: ShardedLock<Vec<Arc<Backend>>>,
     blacklist: HashSet<SocketAddr>,
 }
 
-impl Conf<Backend> for ConfImpl {
+impl ConfImpl {
+    fn backend(backends: &Vec<Arc<Backend>>) -> Option<&Arc<Backend>> {
+        backends.first()
+    }
+}
+
+impl Conf<Arc<Backend>> for ConfImpl {
     type Trace = Instant;
     fn bind_address(&self) -> &BindAddress {
         &self.bind_address
@@ -190,9 +198,18 @@ impl Conf<Backend> for ConfImpl {
         }
     }
 
-    fn select(&self, remote_address: &SocketAddr, _trace: Self::Trace) -> Option<&Backend> {
-        let selected = self.backends.first();
-        if let Some(backend) = selected {
+    fn select(&self, remote_address: &SocketAddr, _trace: Self::Trace) -> Option<Arc<Backend>> {
+        let selected = if let Ok(backends) = self.backends.read() {
+            if let Some(first) = Self::backend(&*backends) {
+                let backend = first.clone();
+                Some(backend)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(ref backend) = selected {
             backend.active_counter.fetch_add(1, Ordering::Relaxed);
         } else {
             eprintln!("{} => NO BACKEND", remote_address);
@@ -208,16 +225,31 @@ impl Conf<Backend> for ConfImpl {
     fn write_timeout(&self) -> Option<Duration> {
         self.write_timeout
     }
-    fn add_backend(&self, _backend_address: SocketAddr) {
-        todo!()
+    fn add_backend(&self, backend_address: SocketAddr) {
+        let mut backends = self.backends.write().unwrap();
+        if backends
+            .iter()
+            .enumerate()
+            .find(|it| it.1.address == backend_address)
+            .is_none()
+        {
+            backends.push(Arc::new(Backend::init(backend_address)));
+        }
     }
-    fn remove_backend(&self, _backend_address: SocketAddr) {
-        todo!()
+    fn remove_backend(&self, backend_address: SocketAddr) {
+        let mut backends = self.backends.write().unwrap();
+        if let Some((pos, _)) = backends
+            .iter()
+            .enumerate()
+            .find(|it| it.1.address == backend_address)
+        {
+            backends.remove(pos);
+        }
     }
     fn record_success(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &Backend,
+        backend_address: Arc<Backend>,
         request_size: u64,
         response_size: u64,
         trace: Self::Trace,
@@ -239,7 +271,7 @@ impl Conf<Backend> for ConfImpl {
     fn record_connection_failure(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &Backend,
+        backend_address: Arc<Backend>,
         error: std::io::Error,
         trace: Self::Trace,
     ) {
@@ -261,7 +293,7 @@ impl Conf<Backend> for ConfImpl {
     fn record_connection_timeout(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &Backend,
+        backend_address: Arc<Backend>,
         error: std::io::Error,
         trace: Self::Trace,
     ) {
@@ -283,7 +315,7 @@ impl Conf<Backend> for ConfImpl {
     fn record_read_failure(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &Backend,
+        backend_address: Arc<Backend>,
         error: std::io::Error,
         trace: Self::Trace,
     ) {
@@ -305,7 +337,7 @@ impl Conf<Backend> for ConfImpl {
     fn record_read_timeout(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &Backend,
+        backend_address: Arc<Backend>,
         error: std::io::Error,
         trace: Self::Trace,
     ) {
@@ -327,7 +359,7 @@ impl Conf<Backend> for ConfImpl {
     fn record_write_failure(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &Backend,
+        backend_address: Arc<Backend>,
         error: std::io::Error,
         trace: Self::Trace,
     ) {
@@ -349,7 +381,7 @@ impl Conf<Backend> for ConfImpl {
     fn record_write_timeout(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &Backend,
+        backend_address: Arc<Backend>,
         error: std::io::Error,
         trace: Self::Trace,
     ) {
@@ -377,7 +409,7 @@ pub struct Backend {
     unavailable: AtomicBool,
 }
 
-impl ToSocketAddr for Backend {
+impl ToSocketAddr for Arc<Backend> {
     fn address(&self) -> &SocketAddr {
         &self.address
     }
