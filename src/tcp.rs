@@ -1,17 +1,19 @@
-use crate::conf::{BindAddress, Conf};
+use crate::conf::{BindAddress, Conf, ToSocketAddr};
 use crate::errors::Error;
 use std::net::SocketAddr;
 use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 
-pub async fn connect<C: Conf + Sync>(config: &'static C) -> Result<(), Error> {
+pub async fn connect<B: ToSocketAddr + Sync, C: Conf<B> + Sync>(
+    config: &'static C,
+) -> Result<(), Error> {
     let listener = config.bind_address().bind().await?;
     loop {
         if let Ok((mut client_stream, remote_address)) = listener.accept().await {
             tokio::spawn(async move {
                 if let Some(trace) = config.accept(&remote_address) {
                     if let Some(backend_address) = config.select(&remote_address, trace) {
-                        match TcpStream::connect(backend_address).await {
+                        match TcpStream::connect(backend_address.address()).await {
                             Ok(mut backend_stream) => {
                                 let (mut client_stream_read, mut client_stream_write) =
                                     client_stream.split();

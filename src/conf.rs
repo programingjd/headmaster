@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64};
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
@@ -9,12 +10,16 @@ pub enum BindAddress {
     TcpSocket(SocketAddr),
 }
 
-pub trait Conf {
+pub trait ToSocketAddr {
+    fn address(&self) -> &SocketAddr;
+}
+
+pub trait Conf<T: ToSocketAddr> {
     type Trace: Copy + Send;
     fn bind_address(&self) -> &BindAddress;
     fn admin_address(&self) -> &BindAddress;
     fn accept(&self, remote_address: &SocketAddr) -> Option<Self::Trace>;
-    fn select(&self, remote_address: &SocketAddr, trace: Self::Trace) -> Option<&SocketAddr>;
+    fn select(&self, remote_address: &SocketAddr, trace: Self::Trace) -> Option<&T>;
     fn connection_timeout(&self) -> Option<Duration>;
     fn read_timeout(&self) -> Option<Duration>;
     fn write_timeout(&self) -> Option<Duration>;
@@ -23,7 +28,7 @@ pub trait Conf {
     fn record_success(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &T,
         request_size: u64,
         response_size: u64,
         trace: Self::Trace,
@@ -31,42 +36,42 @@ pub trait Conf {
     fn record_connection_failure(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &T,
         error: std::io::Error,
         trace: Self::Trace,
     );
     fn record_connection_timeout(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &T,
         error: std::io::Error,
         trace: Self::Trace,
     );
     fn record_read_failure(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &T,
         error: std::io::Error,
         trace: Self::Trace,
     );
     fn record_read_timeout(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &T,
         error: std::io::Error,
         trace: Self::Trace,
     );
     fn record_write_failure(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &T,
         error: std::io::Error,
         trace: Self::Trace,
     );
     fn record_write_timeout(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &T,
         error: std::io::Error,
         trace: Self::Trace,
     );
@@ -164,11 +169,11 @@ pub struct ConfImpl {
     connection_timeout: Option<Duration>,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
-    backends: Vec<SocketAddr>,
+    backends: Vec<Backend>,
     blacklist: HashSet<SocketAddr>,
 }
 
-impl Conf for ConfImpl {
+impl Conf<Backend> for ConfImpl {
     type Trace = Instant;
     fn bind_address(&self) -> &BindAddress {
         &self.bind_address
@@ -176,7 +181,7 @@ impl Conf for ConfImpl {
     fn admin_address(&self) -> &BindAddress {
         &self.admin_address
     }
-    fn accept(&self, remote_address: &SocketAddr) -> Option<Instant> {
+    fn accept(&self, remote_address: &SocketAddr) -> Option<Self::Trace> {
         let start_time = Instant::now();
         if self.blacklist.contains(remote_address) {
             None
@@ -184,13 +189,11 @@ impl Conf for ConfImpl {
             Some(start_time)
         }
     }
-    fn select(&self, remote_address: &SocketAddr, _trace: Instant) -> Option<&SocketAddr> {
+
+    fn select(&self, remote_address: &SocketAddr, _trace: Self::Trace) -> Option<&Backend> {
         let selected = self.backends.first();
         if selected.is_none() {
-            println!(
-                "Request from {} was dropped because there was no backend available",
-                remote_address
-            );
+            eprintln!("{} => NO BACKEND", remote_address);
         }
         selected
     }
@@ -212,17 +215,17 @@ impl Conf for ConfImpl {
     fn record_success(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &Backend,
         request_size: u64,
         response_size: u64,
-        trace: Instant,
+        trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
         println!(
             "{} [{}] => {} [{}] ({}ms)",
             remote_address,
             request_size,
-            backend_address,
+            backend_address.address,
             response_size,
             time.as_millis()
         );
@@ -230,15 +233,15 @@ impl Conf for ConfImpl {
     fn record_connection_failure(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &Backend,
         error: std::io::Error,
-        trace: Instant,
+        trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
         eprintln!(
             "{} => {} FAILURE ({}ms)\n{}",
             remote_address,
-            backend_address,
+            backend_address.address,
             time.as_millis(),
             error
         );
@@ -246,15 +249,15 @@ impl Conf for ConfImpl {
     fn record_connection_timeout(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &Backend,
         error: std::io::Error,
-        trace: Instant,
+        trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
         eprintln!(
             "{} => {} TIMEOUT ({}ms)\n{}",
             remote_address,
-            backend_address,
+            backend_address.address,
             time.as_millis(),
             error
         );
@@ -262,15 +265,15 @@ impl Conf for ConfImpl {
     fn record_read_failure(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &Backend,
         error: std::io::Error,
-        trace: Instant,
+        trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
         eprintln!(
             "{} [FAILURE] => {} ({}ms)\n{}",
             remote_address,
-            backend_address,
+            backend_address.address,
             time.as_millis(),
             error
         );
@@ -278,15 +281,15 @@ impl Conf for ConfImpl {
     fn record_read_timeout(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &Backend,
         error: std::io::Error,
-        trace: Instant,
+        trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
         eprintln!(
             "{} [TIMEOUT] => {} ({}ms)\n{}",
             remote_address,
-            backend_address,
+            backend_address.address,
             time.as_millis(),
             error
         );
@@ -294,15 +297,15 @@ impl Conf for ConfImpl {
     fn record_write_failure(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &Backend,
         error: std::io::Error,
-        trace: Instant,
+        trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
         eprintln!(
             "{} [] => {} [FAILURE] ({}ms)\n{}",
             remote_address,
-            backend_address,
+            backend_address.address,
             time.as_millis(),
             error
         );
@@ -310,17 +313,41 @@ impl Conf for ConfImpl {
     fn record_write_timeout(
         &self,
         remote_address: &SocketAddr,
-        backend_address: &SocketAddr,
+        backend_address: &Backend,
         error: std::io::Error,
-        trace: Instant,
+        trace: Self::Trace,
     ) {
         let time = Instant::now().duration_since(trace);
         eprintln!(
             "{} [] => {} [TIMEOUT] ({}ms)\n{}",
             remote_address,
-            backend_address,
+            backend_address.address,
             time.as_millis(),
             error
         );
+    }
+}
+
+pub struct Backend {
+    address: SocketAddr,
+    active_counter: AtomicI32,
+    last_failure: AtomicU64,
+    unavailable: AtomicBool,
+}
+
+impl ToSocketAddr for Backend {
+    fn address(&self) -> &SocketAddr {
+        &self.address
+    }
+}
+
+impl Backend {
+    fn init(address: SocketAddr) -> Self {
+        Self {
+            address,
+            active_counter: AtomicI32::new(0),
+            last_failure: AtomicU64::new(0),
+            unavailable: AtomicBool::new(false),
+        }
     }
 }
