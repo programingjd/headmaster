@@ -7,7 +7,23 @@ use tokio::net::{TcpListener, TcpStream};
 pub async fn connect<B: ToSocketAddr + Sync + Send, C: Conf<B> + Sync>(
     config: &'static C,
 ) -> Result<(), Error> {
-    let listener = config.bind_address().bind().await?;
+    accept_loop(config, bind(config).await?).await
+}
+
+pub async fn bind<B: ToSocketAddr + Sync + Send, C: Conf<B> + Sync>(
+    config: &'static C,
+) -> Result<SocketListener, Error> {
+    config
+        .bind_address()
+        .bind()
+        .await
+        .map_err(|err| Error::from(err))
+}
+
+pub async fn accept_loop<'a, B: ToSocketAddr + Sync + Send, C: Conf<B> + Sync>(
+    config: &'static C,
+    listener: SocketListener,
+) -> Result<(), Error> {
     loop {
         if let Ok((mut client_stream, remote_address)) = listener.accept().await {
             tokio::spawn(async move {
